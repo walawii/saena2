@@ -1,12 +1,13 @@
 import { Router, Request, Response } from 'express';
+import { orderRepository } from '../repositories/postgres/orderRepository.js';
+import { webhookRepository } from '../repositories/postgres/webhookRepository.js';
 import { paymentService } from '../providers/payment/index.js';
 import { shippingService } from '../providers/shipping/index.js';
 import { notificationService } from '../services/notificationService.js';
-import { dataStore } from '../repositories/store.js';
 
 const router = Router();
 
-// GET /api/payments/status - Gateway status
+// GET /api/payments/status - Integration status check
 router.get('/status', (_req: Request, res: Response) => {
   res.json({
     success: true,
@@ -14,185 +15,118 @@ router.get('/status', (_req: Request, res: Response) => {
   });
 });
 
-// POST /api/payments/doku/create - Create DOKU payment transaction
-router.post('/doku/create', async (req: Request, res: Response) => {
-  try {
-    const { orderNumber, paymentMethodCode } = req.body;
-
-    if (!orderNumber || !paymentMethodCode) {
-      return res.status(400).json({
-        success: false,
-        message: 'Nomor pesanan dan metode pembayaran wajib diisi.'
-      });
-    }
-
-    const order = dataStore.getOrderByNumber(orderNumber);
-    if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: 'Pesanan tidak ditemukan.'
-      });
-    }
-
-    const provider = paymentService.getProvider();
-    const result = await provider.createPayment({
-      orderNumber: order.orderNumber,
-      amount: order.total,
-      paymentMethodCode,
-      customer: {
-        name: order.customer.name,
-        email: order.customer.email,
-        phone: order.customer.phone
-      },
-      items: order.items.map(i => ({
-        id: i.productId,
-        name: `${i.name} (${i.color} - ${i.size})`,
-        price: i.price,
-        quantity: i.quantity
-      }))
-    });
-
-    // Update order with payment method details
-    order.paymentMethod = result.paymentMethod;
-    order.updatedAt = new Date().toISOString();
-
-    res.json({
-      success: true,
-      provider: provider.name,
-      isLive: paymentService.isLiveProvider(),
-      data: result
-    });
-  } catch (err: any) {
-    console.error('Error creating DOKU payment:', err.message);
-    res.status(500).json({
-      success: false,
-      message: 'Pembayaran belum berhasil diinisiasi. Silakan coba lagi atau pilih metode pembayaran lain.',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
-  }
-});
-
-// POST /api/payments/doku/webhook - DOKU Webhook Notification
+// POST /api/payments/doku/webhook - Official DOKU Webhook Notification Endpoint
 router.post('/doku/webhook', async (req: Request, res: Response) => {
   try {
     const provider = paymentService.getProvider();
+    const headers = req.headers as Record<string, string | string[] | undefined>;
+    const rawBody = JSON.stringify(req.body);
 
-    // Verify signature
-    const isValid = provider.verifySignature(
-      req.headers as Record<string, string | string[] | undefined>,
-      JSON.stringify(req.body)
-    );
-
-    if (!isValid) {
-      console.warn('[DOKU Webhook] Invalid signature rejected');
-      return res.status(401).json({ success: false, message: 'Invalid signature' });
+    // 1. Verify DOKU cryptographic HMAC-SHA256 signature
+    const isValidSignature = provider.verifySignature(headers, rawBody);
+    if (!isValidSignature && provider.isConfigured()) {
+      console.warn('[DOKU Webhook] Invalid signature rejected from IP:', req.ip);
+      return res.status(401).json({ success: false, message: 'Invalid cryptographic signature' });
     }
 
     const parsed = provider.parseWebhook(req.body);
-    const order = dataStore.getOrderByNumber(parsed.orderNumber);
+    const orderNumber = parsed.orderNumber;
 
+    if (!orderNumber) {
+      return res.status(400).json({ success: false, message: 'Invalid payload: missing order number' });
+    }
+
+    // 2. Idempotency & Replay Attack Protection
+    const requestId = (headers['request-id'] as string) || parsed.paymentId;
+    const idempotencyKey = `doku_${orderNumber}_${parsed.status}_${requestId}`;
+
+    const alreadyProcessed = await webhookRepository.isAlreadyProcessed(idempotencyKey);
+    if (alreadyProcessed) {
+      console.log(`[DOKU Webhook] Idempotent skip: ${idempotencyKey} already processed`);
+      return res.status(200).json({ success: true, message: 'Notification already processed' });
+    }
+
+    // Record incoming webhook event
+    await webhookRepository.recordEvent({
+      provider: 'DOKU',
+      eventId: requestId,
+      eventType: `PAYMENT_${parsed.status}`,
+      idempotencyKey,
+      payload: req.body
+    });
+
+    // 3. Process payment status transition
+    const order = await orderRepository.getOrderByNumber(orderNumber);
     if (!order) {
+      console.warn(`[DOKU Webhook] Order not found for notification: ${orderNumber}`);
+      await webhookRepository.markProcessed(idempotencyKey, 'FAILED', `Order not found: ${orderNumber}`);
       return res.status(404).json({ success: false, message: 'Order not found' });
     }
 
     if (parsed.status === 'PAID') {
-      dataStore.updatePaymentStatus(order.orderNumber, 'PAID', 'Pembayaran terverifikasi via DOKU Webhook');
+      // Transition order to PAID (deducts stock and releases reservation in PostgreSQL transaction)
+      if (order.orderStatus === 'PENDING_PAYMENT') {
+        await orderRepository.updateOrderStatus(
+          order.orderNumber,
+          'PAID',
+          `Pembayaran berhasil diverifikasi resmi via DOKU Webhook (Trx: ${parsed.paymentId})`
+        );
 
-      // Trigger automatic Mengantar shipment creation if not yet generated
-      if (!order.trackingNumber) {
-        try {
-          const shippingProvider = shippingService.getProvider();
-          const shipment = await shippingProvider.createShipment({
-            orderNumber: order.orderNumber,
-            serviceCode: 'MGT-REG',
-            recipientName: order.shippingAddress.recipientName,
-            recipientPhone: order.shippingAddress.phone,
-            fullAddress: order.shippingAddress.fullAddress,
-            postalCode: order.shippingAddress.postalCode,
-            subdistrict: order.shippingAddress.subdistrict,
-            city: order.shippingAddress.city,
-            province: order.shippingAddress.province,
-            totalWeightGrams: 500,
-            goodsValue: order.total
-          });
-
-          dataStore.setOrderTracking(order.orderNumber, shipment.trackingNumber, shipment.serviceName);
-        } catch (shipErr: any) {
-          console.error('[Webhook] Auto-shipment error:', shipErr.message);
-        }
-      }
-
-      await notificationService.notify({
-        type: 'PAYMENT_SUCCESSFUL',
-        orderNumber: order.orderNumber,
-        customerEmail: order.customer.email,
-        customerPhone: order.customer.phone,
-        metadata: { amount: parsed.amount, paymentId: parsed.paymentId }
-      });
-    } else if (parsed.status === 'EXPIRED') {
-      dataStore.updatePaymentStatus(order.orderNumber, 'EXPIRED', 'Pembayaran telah kadaluarsa');
-      await notificationService.notify({
-        type: 'PAYMENT_FAILED',
-        orderNumber: order.orderNumber,
-        customerEmail: order.customer.email,
-        customerPhone: order.customer.phone
-      });
-    }
-
-    res.json({ success: true, message: 'Webhook processed successfully' });
-  } catch (err: any) {
-    console.error('Webhook error:', err.message);
-    res.status(500).json({ success: false, message: 'Internal webhook error' });
-  }
-});
-
-// POST /api/payments/simulate - Simulation endpoint for demo testing in browser
-router.post('/simulate', async (req: Request, res: Response) => {
-  try {
-    const { orderNumber, status } = req.body; // status: 'PAID' | 'EXPIRED' | 'FAILED'
-    const order = dataStore.getOrderByNumber(orderNumber);
-
-    if (!order) {
-      return res.status(404).json({ success: false, message: 'Order not found' });
-    }
-
-    if (status === 'PAID') {
-      dataStore.updatePaymentStatus(order.orderNumber, 'PAID', 'Simulasi pembayaran DOKU berhasil');
-
-      // Auto create shipment in demo mode
-      if (!order.trackingNumber) {
+        // Auto-create Mengantar shipment if shipping provider is configured
         const shippingProvider = shippingService.getProvider();
-        const shipment = await shippingProvider.createShipment({
+        if (shippingProvider.isConfigured()) {
+          try {
+            const shipment = await shippingProvider.createShipment({
+              orderNumber: order.orderNumber,
+              serviceCode: 'MGT-REG',
+              recipientName: order.shippingAddress.recipientName,
+              recipientPhone: order.shippingAddress.phone,
+              fullAddress: order.shippingAddress.fullAddress,
+              postalCode: order.shippingAddress.postalCode,
+              subdistrict: order.shippingAddress.subdistrict,
+              city: order.shippingAddress.city,
+              province: order.shippingAddress.province,
+              totalWeightGrams: 500,
+              goodsValue: order.total
+            });
+
+            await orderRepository.setOrderTracking(order.orderNumber, shipment.trackingNumber, shipment.serviceName);
+          } catch (shipErr: any) {
+            console.error('[DOKU Webhook] Mengantar auto-shipment creation notice:', shipErr.message);
+          }
+        }
+
+        // Notify customer
+        await notificationService.notify({
+          type: 'PAYMENT_SUCCESSFUL',
           orderNumber: order.orderNumber,
-          serviceCode: 'MGT-REG',
-          recipientName: order.shippingAddress.recipientName,
-          recipientPhone: order.shippingAddress.phone,
-          fullAddress: order.shippingAddress.fullAddress,
-          postalCode: order.shippingAddress.postalCode,
-          subdistrict: order.shippingAddress.subdistrict,
-          city: order.shippingAddress.city,
-          province: order.shippingAddress.province,
-          totalWeightGrams: 500,
-          goodsValue: order.total
+          customerEmail: order.customer.email,
+          customerPhone: order.customer.phone,
+          metadata: { amount: parsed.amount, paymentId: parsed.paymentId }
         });
-
-        dataStore.setOrderTracking(order.orderNumber, shipment.trackingNumber, shipment.serviceName);
       }
+    } else if (parsed.status === 'EXPIRED') {
+      if (order.orderStatus === 'PENDING_PAYMENT') {
+        await orderRepository.updateOrderStatus(
+          order.orderNumber,
+          'EXPIRED',
+          'Batas waktu pembayaran DOKU telah berakhir'
+        );
 
-      await notificationService.notify({
-        type: 'PAYMENT_SUCCESSFUL',
-        orderNumber: order.orderNumber,
-        customerEmail: order.customer.email,
-        customerPhone: order.customer.phone
-      });
-    } else if (status === 'FAILED') {
-      dataStore.updatePaymentStatus(order.orderNumber, 'FAILED', 'Simulasi pembayaran gagal');
+        await notificationService.notify({
+          type: 'PAYMENT_FAILED',
+          orderNumber: order.orderNumber,
+          customerEmail: order.customer.email,
+          customerPhone: order.customer.phone
+        });
+      }
     }
 
-    const updated = dataStore.getOrderByNumber(orderNumber);
-    res.json({ success: true, data: updated });
+    await webhookRepository.markProcessed(idempotencyKey, 'PROCESSED');
+    res.status(200).json({ success: true, message: 'Webhook notification successfully processed' });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: 'Gagal memproses simulasi pembayaran' });
+    console.error('[DOKU Webhook Fatal Error]:', err.message);
+    res.status(500).json({ success: false, message: 'Internal server error processing webhook' });
   }
 });
 

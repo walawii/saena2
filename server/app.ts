@@ -9,6 +9,8 @@ import vouchersRouter from './routes/vouchers.js';
 import reviewsRouter from './routes/reviews.js';
 import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { getDatabaseStatus } from './db/connection.js';
 
 dotenv.config();
 
@@ -19,7 +21,7 @@ export function createExpressApp() {
   app.use(express.json({ limit: '5mb' }));
   app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
-  // Request logger in dev
+  // Sanitize request logging (never logs auth headers or body secrets)
   app.use((req, _res, next) => {
     if (req.url.startsWith('/api')) {
       console.log(`[${req.method}] ${req.url}`);
@@ -27,11 +29,13 @@ export function createExpressApp() {
     next();
   });
 
-  // Health check endpoint
+  // Health check endpoint with real database status
   app.get('/api/health', (_req, res) => {
+    const dbStatus = getDatabaseStatus();
     res.json({
       status: 'ok',
-      service: 'Saena.id E-Commerce API',
+      service: 'Saena.id E-Commerce Production API',
+      database: dbStatus,
       timestamp: new Date().toISOString()
     });
   });
@@ -47,20 +51,13 @@ export function createExpressApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/admin', adminRouter);
 
-  // 404 for unmatched API routes
-  app.all('/api/*', (_req, res) => {
+  // 404 for unmatched API routes only (does NOT intercept non-API / SPA routes)
+  app.all(['/api', '/api/*'], (_req, res) => {
     res.status(404).json({ success: false, message: 'API endpoint tidak ditemukan' });
   });
 
-  // Global Error Handler
-  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error('Express Unhandled Error:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Terjadi kesalahan pada server. Silakan coba kembali nanti.',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
-  });
+  // Centralized Error Handler
+  app.use(errorHandler);
 
   return app;
 }

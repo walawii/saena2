@@ -7,7 +7,7 @@ import {
 } from './types.js';
 
 export class DokuPaymentProvider implements PaymentProvider {
-  name = 'DOKU Payment Gateway';
+  name = 'DOKU Jokul Payment Gateway';
   private clientId: string;
   private secretKey: string;
   private environment: string;
@@ -16,27 +16,26 @@ export class DokuPaymentProvider implements PaymentProvider {
   constructor() {
     this.clientId = process.env.DOKU_CLIENT_ID || '';
     this.secretKey = process.env.DOKU_SECRET_KEY || '';
-    this.environment = process.env.DOKU_ENVIRONMENT || 'sandbox';
-    this.baseUrl = this.environment === 'production' 
-      ? 'https://api.doku.com' 
+    this.environment = (process.env.DOKU_ENVIRONMENT || 'sandbox').toLowerCase();
+    this.baseUrl = this.environment === 'production'
+      ? 'https://api.doku.com'
       : 'https://api-sandbox.doku.com';
   }
 
   isConfigured(): boolean {
     return Boolean(
-      this.clientId && 
-      this.secretKey && 
-      this.clientId !== 'MALL-CLIENT-ID-EXAMPLE' && 
+      this.clientId &&
+      this.secretKey &&
+      this.clientId !== 'MALL-CLIENT-ID-EXAMPLE' &&
       this.secretKey !== 'SK-DOKU-SECRET-KEY-EXAMPLE'
     );
   }
 
-  private generateDigest(jsonBody: string): string {
-    const hash = crypto.createHash('sha256').update(jsonBody).digest('base64');
-    return hash;
+  generateDigest(jsonBody: string): string {
+    return crypto.createHash('sha256').update(jsonBody, 'utf8').digest('base64');
   }
 
-  private generateSignature(
+  generateSignature(
     clientId: string,
     requestId: string,
     timestamp: string,
@@ -51,7 +50,9 @@ export class DokuPaymentProvider implements PaymentProvider {
 
   async createPayment(request: PaymentCreateRequest): Promise<PaymentCreateResult> {
     if (!this.isConfigured()) {
-      throw new Error('DOKU credentials are not configured in environment variables');
+      throw new Error(
+        'BLOCKED / REQUIRES CONFIGURATION: DOKU credentials are not configured. Silakan atur DOKU_CLIENT_ID dan DOKU_SECRET_KEY pada environment variables.'
+      );
     }
 
     const requestId = `REQ-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -66,7 +67,7 @@ export class DokuPaymentProvider implements PaymentProvider {
         invoice_number: request.orderNumber,
         amount: request.amount,
         line_items: request.items.map(i => ({
-          name: i.name,
+          name: i.name.substring(0, 50),
           price: i.price,
           quantity: i.quantity
         }))
@@ -176,22 +177,34 @@ export class DokuPaymentProvider implements PaymentProvider {
   }
 
   verifySignature(headers: Record<string, string | string[] | undefined>, rawBody: string): boolean {
-    if (!this.isConfigured()) return true;
-
+    if (!this.isConfigured()) return false;
     try {
       const clientId = headers['client-id'] as string;
       const requestId = headers['request-id'] as string;
       const timestamp = headers['request-timestamp'] as string;
       const signatureHeader = headers['signature'] as string;
-      const target = headers['request-target'] as string || '/api/payments/doku/webhook';
+      const target = (headers['request-target'] as string) || '/api/payments/doku/webhook';
 
       if (!signatureHeader || !clientId || !requestId || !timestamp) {
         return false;
       }
 
+      if (clientId !== this.clientId) {
+        return false;
+      }
+
       const digest = this.generateDigest(rawBody);
       const expectedSignature = this.generateSignature(clientId, requestId, timestamp, target, digest);
-      return signatureHeader === expectedSignature;
+
+      // Constant time comparison to prevent timing attacks
+      const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+      const receivedBuffer = Buffer.from(signatureHeader, 'utf8');
+
+      if (expectedBuffer.length !== receivedBuffer.length) {
+        return false;
+      }
+
+      return crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
     } catch (e) {
       return false;
     }
@@ -219,6 +232,17 @@ export class DokuPaymentProvider implements PaymentProvider {
       amount,
       paidAt: body.transaction?.date || new Date().toISOString(),
       rawPayload: body
+    };
+  }
+
+  getStatus() {
+    return {
+      providerName: this.name,
+      isConfigured: this.isConfigured(),
+      environment: this.environment,
+      baseUrl: this.baseUrl,
+      status: this.isConfigured() ? 'READY' : 'BLOCKED / REQUIRES CONFIGURATION',
+      requiredVariables: ['DOKU_CLIENT_ID', 'DOKU_SECRET_KEY', 'DOKU_ENVIRONMENT']
     };
   }
 }

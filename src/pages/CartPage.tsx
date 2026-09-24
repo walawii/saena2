@@ -100,7 +100,7 @@ export const CartPage: React.FC<CartPageProps> = ({ onNavigate, onAddToCartSucce
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-start">
                     <div>
-                      <p className="text-xs text-slate-400">{item.product.categoryName}</p>
+                      <p className="text-xs text-slate-400">{item.product.categoryName || item.product.category}</p>
                       <h3
                         onClick={() => onNavigate(`/produk/${item.product.slug}`)}
                         className="font-semibold text-sm text-slate-900 truncate hover:text-blue-900 cursor-pointer"
@@ -142,7 +142,7 @@ export const CartPage: React.FC<CartPageProps> = ({ onNavigate, onAddToCartSucce
 
                     <div className="text-right">
                       <span className="text-sm font-bold text-slate-900 tabular-nums">
-                        Rp {item.totalPrice.toLocaleString('id-ID')}
+                        Rp {(item.totalPrice || item.price * item.quantity).toLocaleString('id-ID')}
                       </span>
                       {item.quantity > 1 && (
                         <p className="text-[11px] text-slate-400 tabular-nums">

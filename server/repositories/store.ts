@@ -219,8 +219,8 @@ class DataStore {
       result = result.filter(p => 
         p.name.toLowerCase().includes(q) ||
         p.description.toLowerCase().includes(q) ||
-        p.categoryName.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q)
+        (p.categoryName || p.category || '').toLowerCase().includes(q) ||
+        (p.sku || '').toLowerCase().includes(q)
       );
     }
 
@@ -256,7 +256,7 @@ class DataStore {
         break;
       case 'newest':
       default:
-        result.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        result.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
         break;
     }
 
@@ -356,30 +356,38 @@ class DataStore {
     }
 
     const now = new Date();
-    if (new Date(voucher.startDate) > now || new Date(voucher.endDate) < now) {
+    const startDate = voucher.startDate ? new Date(voucher.startDate) : new Date(0);
+    const endDate = voucher.endDate ? new Date(voucher.endDate) : new Date(Date.now() + 86400000);
+    if (startDate > now || endDate < now) {
       return { valid: false, discount: 0, message: 'Masa berlaku voucher telah berakhir.' };
     }
 
-    if (voucher.usageLimit > 0 && voucher.usedCount >= voucher.usageLimit) {
+    const usageLimit = voucher.quota ?? voucher.usageLimit ?? 0;
+    if (usageLimit > 0 && voucher.usedCount >= usageLimit) {
       return { valid: false, discount: 0, message: 'Kuota penggunaan voucher ini telah habis.' };
     }
 
-    if (subtotal < voucher.minimumPurchase) {
+    const minSpend = voucher.minSpend ?? voucher.minimumPurchase ?? 0;
+    if (subtotal < minSpend) {
       return {
         valid: false,
         discount: 0,
-        message: `Minimal belanja untuk voucher ini adalah Rp ${voucher.minimumPurchase.toLocaleString('id-ID')}`
+        message: `Minimal belanja untuk voucher ini adalah Rp ${minSpend.toLocaleString('id-ID')}`
       };
     }
 
     let discount = 0;
-    if (voucher.type === 'PERCENTAGE') {
-      discount = Math.round((subtotal * voucher.value) / 100);
-      if (voucher.maximumDiscount && discount > voucher.maximumDiscount) {
-        discount = voucher.maximumDiscount;
+    const isPercent = (voucher.discountType || voucher.type) === 'PERCENTAGE';
+    const val = voucher.discountValue ?? voucher.value ?? 0;
+    const maxDisc = voucher.maxDiscount ?? voucher.maximumDiscount;
+
+    if (isPercent) {
+      discount = Math.round((subtotal * val) / 100);
+      if (maxDisc && discount > maxDisc) {
+        discount = maxDisc;
       }
     } else {
-      discount = voucher.value;
+      discount = val;
     }
 
     // Ensure discount does not exceed subtotal
@@ -669,3 +677,4 @@ class DataStore {
 }
 
 export const dataStore = new DataStore();
+export const storeRepository = dataStore;

@@ -1,59 +1,133 @@
 import { Router, Request, Response } from 'express';
-import { dataStore } from '../repositories/store.js';
+import { productRepository } from '../repositories/postgres/productRepository.js';
+import { storeRepository } from '../repositories/store.js';
+import { isDatabaseConfigured } from '../db/connection.js';
 
 const router = Router();
 
-// GET /api/products - list and filter products
-router.get('/', (req: Request, res: Response) => {
+// GET /api/products - Get all products with filters
+router.get('/', async (req: Request, res: Response) => {
   try {
-    const { category, search, minPrice, maxPrice, size, color, sort } = req.query;
+    const { category, search, featured, best_seller } = req.query;
 
-    const products = dataStore.getProducts({
+    if (process.env.NODE_ENV === 'production') {
+      if (!isDatabaseConfigured()) {
+        return res.status(503).json({
+          success: false,
+          message: 'Layanan basis data PostgreSQL belum terkonfigurasi pada lingkungan produksi.'
+        });
+      }
+
+      const products = await productRepository.getAllProducts({
+        categorySlug: category as string,
+        search: search as string,
+        isFeatured: featured === 'true' ? true : undefined,
+        isBestSeller: best_seller === 'true' ? true : undefined,
+      });
+
+      return res.json({
+        success: true,
+        data: products
+      });
+    }
+
+    // Development environment fallback
+    if (isDatabaseConfigured()) {
+      try {
+        const products = await productRepository.getAllProducts({
+          categorySlug: category as string,
+          search: search as string,
+          isFeatured: featured === 'true' ? true : undefined,
+          isBestSeller: best_seller === 'true' ? true : undefined,
+        });
+        if (products && products.length > 0) {
+          return res.json({
+            success: true,
+            data: products
+          });
+        }
+      } catch (dbErr: any) {
+        console.warn('[Products DB query fallback]:', dbErr.message);
+      }
+    }
+
+    let products = storeRepository.getProducts({
       category: category as string,
       search: search as string,
-      minPrice: minPrice ? Number(minPrice) : undefined,
-      maxPrice: maxPrice ? Number(maxPrice) : undefined,
-      size: size as string,
-      color: color as string,
-      sort: sort as string,
     });
+    if (featured === 'true') {
+      products = products.filter(p => p.isFeatured);
+    }
+    if (best_seller === 'true') {
+      products = products.filter(p => p.isBestSeller);
+    }
 
     res.json({
       success: true,
-      total: products.length,
       data: products
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: 'Gagal memuat produk', error: err.message });
+    console.error('[Products Route Error]:', err.message);
+    res.status(500).json({ success: false, message: 'Gagal memuat produk' });
   }
 });
 
-// GET /api/products/:identifier - get by slug or id
-router.get('/:identifier', (req: Request, res: Response) => {
+// GET /api/products/:slug - Product detail
+router.get('/:slug', async (req: Request, res: Response) => {
   try {
-    const { identifier } = req.params;
-    let product = dataStore.getProductBySlug(identifier);
-    if (!product) {
-      product = dataStore.getProductById(identifier);
+    const { slug } = req.params;
+
+    if (process.env.NODE_ENV === 'production') {
+      if (!isDatabaseConfigured()) {
+        return res.status(503).json({
+          success: false,
+          message: 'Layanan basis data PostgreSQL belum terkonfigurasi pada lingkungan produksi.'
+        });
+      }
+
+      const product = await productRepository.getProductBySlug(slug);
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: `Produk "${slug}" tidak ditemukan.`
+        });
+      }
+
+      return res.json({
+        success: true,
+        data: product
+      });
     }
 
-    if (!product) {
-      return res.status(404).json({ success: false, message: 'Produk tidak ditemukan' });
+    // Development environment fallback
+    if (isDatabaseConfigured()) {
+      try {
+        const product = await productRepository.getProductBySlug(slug);
+        if (product) {
+          return res.json({
+            success: true,
+            data: product
+          });
+        }
+      } catch (dbErr: any) {
+        console.warn('[Product slug DB fallback]:', dbErr.message);
+      }
     }
 
-    // Related products in the same category
-    const related = dataStore
-      .getProducts({ category: product.category })
-      .filter(p => p.id !== product!.id)
-      .slice(0, 4);
+    const product = storeRepository.getProductBySlug(slug);
+    if (!product) {
+      return res.status(404).json({
+        success: false,
+        message: `Produk "${slug}" tidak ditemukan.`
+      });
+    }
 
     res.json({
       success: true,
-      data: product,
-      related
+      data: product
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: 'Gagal memuat detail produk', error: err.message });
+    res.status(500).json({ success: false, message: 'Gagal memuat produk' });
   }
 });
 

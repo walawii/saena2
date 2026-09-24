@@ -105,7 +105,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
 
   // Find matching variant
   const currentVariant: ProductVariant | undefined = product.variants.find(
-    v => v.colorName.toLowerCase() === selectedColor.toLowerCase() && v.size === selectedSize
+    v => (v.colorName || v.color || '').toLowerCase() === selectedColor.toLowerCase() && v.size === selectedSize
   ) || product.variants[0];
 
   const currentStock = currentVariant ? currentVariant.stock : product.stock;
@@ -167,7 +167,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
         <button onClick={() => onNavigate('/produk')} className="hover:underline">Koleksi</button>
         <span>/</span>
         <button onClick={() => onNavigate(`/kategori/${product.category}`)} className="hover:underline">
-          {product.categoryName}
+          {product.categoryName || product.category}
         </button>
         <span>/</span>
         <span className="text-slate-900 font-medium truncate">{product.name}</span>
@@ -389,11 +389,13 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
             <div className="pt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
               <div className="bg-white p-2.5 rounded-xl border border-stone-200">
                 <span className="text-slate-400 block">Berat Paket:</span>
-                <span className="font-semibold text-slate-800">{product.weight} gram</span>
+                <span className="font-semibold text-slate-800">{product.weightInGrams || product.weight || 350} gram</span>
               </div>
               <div className="bg-white p-2.5 rounded-xl border border-stone-200">
                 <span className="text-slate-400 block">Dimensi:</span>
-                <span className="font-semibold text-slate-800">{product.dimensions.length}x{product.dimensions.width}x{product.dimensions.height} cm</span>
+                <span className="font-semibold text-slate-800">
+                  {product.dimensions?.length ? `${product.dimensions.length}x${product.dimensions.width}x${product.dimensions.height} cm` : 'Standar Kemasan'}
+                </span>
               </div>
             </div>
           </div>

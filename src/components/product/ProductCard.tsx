@@ -98,7 +98,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         <div>
           {/* Unboxed Metadata: Category & Sizes */}
           <div className="text-[11px] text-slate-500 tracking-wide flex items-center gap-1.5 mb-1 truncate">
-            <span>{product.categoryName}</span>
+            <span>{product.categoryName || product.category}</span>
             <span aria-hidden="true">·</span>
             <span>{product.sizes.join(', ')}</span>
           </div>

@@ -1,66 +1,73 @@
-// Common type definitions for Saena.id
-
-export type ProductCategory = 
-  | 'gamis'
-  | 'dress-muslim'
-  | 'daster'
-  | 'mukena'
-  | 'hijab'
-  | 'setelan'
-  | 'anak'
-  | 'best-seller';
-
 export interface ProductVariant {
   id: string;
-  sku: string;
-  colorName: string;
-  colorHex: string;
-  size: 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'All Size';
+  sku?: string;
+  colorName?: string;
+  colorHex?: string;
+  color?: string;
+  size: 'S' | 'M' | 'L' | 'XL' | 'XXL' | 'All Size' | string;
   stock: number;
-  priceModifier?: number; // difference from base price
+  reservedStock?: number;
+  availableStock?: number;
+}
+
+export interface ProductColor {
+  name: string;
+  hex: string;
   image?: string;
 }
 
 export interface Product {
   id: string;
-  sku: string;
   name: string;
   slug: string;
+  sku: string;
   description: string;
-  category: ProductCategory;
-  categoryName: string;
+  category: string;
+  categoryName?: string;
+  categorySlug?: string;
   price: number;
   discountPrice?: number;
   stock: number;
-  weight: number; // in grams
-  dimensions: {
-    length: number; // cm
-    width: number;
-    height: number;
-  };
+  weightInGrams?: number;
+  weight?: number;
+  dimensions?: { length: number; width: number; height: number } | any;
   images: string[];
+  colors: ProductColor[];
+  sizes: ('S' | 'M' | 'L' | 'XL' | 'XXL' | 'All Size' | string)[];
+  materials?: string[];
+  material?: string;
+  careInstructions?: string[] | string;
+  isFeatured?: boolean;
+  isBestSeller?: boolean;
+  isNewArrival?: boolean;
   variants: ProductVariant[];
-  colors: { name: string; hex: string }[];
-  sizes: string[];
-  status: 'ACTIVE' | 'DRAFT' | 'OUT_OF_STOCK';
   rating: number;
   reviewCount: number;
-  isBestSeller?: boolean;
-  isFeatured?: boolean;
-  isNewArrival?: boolean;
-  createdAt: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Category {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  image: string;
+  productCount: number;
 }
 
 export interface CartItem {
-  id: string; // unique item cart id
+  id: string; // composite key: productId-variantId
   productId: string;
   variantId: string;
   product: Product;
+  variant: ProductVariant;
   selectedColor: string;
   selectedSize: string;
   quantity: number;
-  price: number;
-  totalPrice: number;
+  price: number; // discountPrice or regular price at time of adding
+  totalPrice?: number;
 }
 
 export interface Cart {
@@ -68,9 +75,9 @@ export interface Cart {
   subtotal: number;
   discount: number;
   voucherCode?: string;
-  appliedVoucherCode?: string;
+  shippingFee?: number;
+  totalWeight: number; // grams
   total: number;
-  totalWeight: number; // in grams
 }
 
 export interface CustomerInfo {
@@ -80,7 +87,7 @@ export interface CustomerInfo {
 }
 
 export interface ShippingAddress {
-  id?: string;
+  id: string;
   recipientName: string;
   phone: string;
   province: string;
@@ -97,7 +104,9 @@ export type OrderStatus =
   | 'PENDING_PAYMENT'
   | 'PAID'
   | 'PROCESSING'
+  | 'READY_TO_SHIP'
   | 'SHIPPED'
+  | 'IN_TRANSIT'
   | 'DELIVERED'
   | 'CANCELLED'
   | 'EXPIRED'
@@ -112,9 +121,10 @@ export type PaymentStatus =
 
 export interface ShippingOption {
   provider: string; // e.g. 'mengantar'
+  courierCode?: string;
   serviceCode: string; // e.g. 'REG', 'EXP', 'CARGO'
   serviceName: string; // e.g. 'Mengantar Regular (JNE/J&T/SiCepat)'
-  estimatedDays: string; // e.g. '2-3 hari'
+  estimatedDays?: string; // e.g. '2-3 hari'
   cost: number;
   description?: string;
 }
@@ -136,6 +146,7 @@ export interface OrderItem {
 export interface Order {
   id: string;
   orderNumber: string; // e.g. SAENA-20260923-0001
+  userId?: string;
   customer: CustomerInfo;
   items: OrderItem[];
   subtotal: number;
@@ -171,23 +182,30 @@ export interface Order {
 export interface Voucher {
   id: string;
   code: string;
-  type: 'PERCENTAGE' | 'FIXED';
-  value: number; // e.g. 15 (%) or 25000 (IDR)
-  minimumPurchase: number;
+  name?: string;
+  type?: 'PERCENTAGE' | 'FIXED';
+  discountType?: 'PERCENTAGE' | 'FIXED';
+  value?: number; // e.g. 15 (%) or 25000 (IDR)
+  discountValue?: number;
+  minimumPurchase?: number;
+  minSpend?: number;
   maximumDiscount?: number;
-  startDate: string;
-  endDate: string;
-  usageLimit: number;
+  maxDiscount?: number;
+  startDate?: string;
+  endDate?: string;
+  usageLimit?: number;
+  quota?: number;
   usedCount: number;
-  perUserLimit: number;
-  active: boolean;
-  description: string;
+  perUserLimit?: number;
+  active?: boolean;
+  isActive?: boolean;
+  description?: string;
 }
 
 export interface Review {
   id: string;
   productId: string;
-  productName: string;
+  productName?: string;
   customerName: string;
   rating: number;
   comment: string;

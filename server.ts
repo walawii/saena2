@@ -3,11 +3,33 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { createExpressApp } from './server/app.js';
+import { isDatabaseConfigured, testConnection } from './server/db/connection.js';
+import { runMigrations } from './server/db/migrator.js';
+import { seedDatabase } from './server/db/seed.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
+  // Run database migrations and seeding if database is configured
+  if (isDatabaseConfigured()) {
+    try {
+      const status = await testConnection();
+      if (status.isConnected) {
+        console.log('[PostgreSQL] Connected successfully. Running migrations...');
+        await runMigrations();
+        await seedDatabase();
+        console.log('[PostgreSQL] Database setup and seed verified.');
+      } else {
+        console.warn('[PostgreSQL Warning]:', status.errorMessage);
+      }
+    } catch (dbErr: any) {
+      console.warn('[PostgreSQL Startup Notice]:', dbErr.message);
+    }
+  } else {
+    console.log('[PostgreSQL Info]: DATABASE_URL is not set or set to mock. Database integration ready for live PostgreSQL URL.');
+  }
+
   const app = createExpressApp();
   const port = Number(process.env.PORT) || 3000;
   const isProd = process.env.NODE_ENV === 'production';

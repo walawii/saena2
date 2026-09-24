@@ -88,7 +88,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({ isOpen, onClose, onNav
                     className="w-12 h-14 object-cover rounded-lg bg-stone-100 shrink-0"
                   />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-slate-500">{product.categoryName}</p>
+                    <p className="text-xs text-slate-500">{product.categoryName || product.category}</p>
                     <h4 className="text-sm font-semibold text-slate-900 truncate">{product.name}</h4>
                     <p className="text-xs font-semibold text-slate-900 mt-0.5">
                       Rp {(product.discountPrice || product.price).toLocaleString('id-ID')}

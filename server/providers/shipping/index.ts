@@ -3,38 +3,49 @@ import { MengantarShippingProvider } from './MengantarShippingProvider.js';
 import { MockShippingProvider } from './MockShippingProvider.js';
 
 class ShippingService {
-  private activeProvider: ShippingProvider;
   private mengantarProvider: MengantarShippingProvider;
-  private mockProvider: MockShippingProvider;
+  private mockProvider?: MockShippingProvider;
 
   constructor() {
     this.mengantarProvider = new MengantarShippingProvider();
-    this.mockProvider = new MockShippingProvider();
-
-    // Use Mengantar if configured, else use Mock
-    if (this.mengantarProvider.isConfigured()) {
-      this.activeProvider = this.mengantarProvider;
-      console.log('[ShippingService] Using live Mengantar Shipping Provider');
-    } else {
-      this.activeProvider = this.mockProvider;
-      console.log('[ShippingService] Using Mock Shipping Provider (Mengantar API credentials not set or in test mode)');
+    if (process.env.NODE_ENV === 'development') {
+      this.mockProvider = new MockShippingProvider();
     }
   }
 
   getProvider(): ShippingProvider {
-    return this.activeProvider;
+    if (this.mengantarProvider.isConfigured()) {
+      return this.mengantarProvider;
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      // In production, NEVER silently fake rates with mock
+      return this.mengantarProvider;
+    }
+
+    // In local development only
+    return this.mockProvider || this.mengantarProvider;
   }
 
   isLiveProvider(): boolean {
-    return this.activeProvider === this.mengantarProvider;
+    return this.mengantarProvider.isConfigured();
   }
 
   getStatus() {
+    const isConfigured = this.mengantarProvider.isConfigured();
     return {
-      providerName: this.activeProvider.name,
-      isLive: this.isLiveProvider(),
-      hasApiKey: this.mengantarProvider.isConfigured(),
-      baseUrl: process.env.MENGANTAR_BASE_URL || 'https://api.mengantar.com',
+      providerName: 'Mengantar Shipping Aggregator',
+      isLive: isConfigured,
+      hasApiKey: isConfigured,
+      baseUrl: process.env.MENGANTAR_BASE_URL || 'https://api-public.mengantar.com',
+      status: isConfigured ? 'READY' : 'BLOCKED / REQUIRES CONFIGURATION',
+      requiredVariables: [
+        'MENGANTAR_API_KEY',
+        'MENGANTAR_BASE_URL',
+        'MENGANTAR_ORIGIN_SUBDISTRICT',
+        'MENGANTAR_ORIGIN_POSTAL'
+      ],
+      documentationUrl: 'https://mengantar.com'
     };
   }
 }

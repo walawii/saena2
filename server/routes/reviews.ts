@@ -1,51 +1,47 @@
 import { Router, Request, Response } from 'express';
-import { dataStore } from '../repositories/store.js';
+import { reviewRepository } from '../repositories/postgres/reviewRepository.js';
+import { getErrorMessage } from '../validators/formatError.js';
+import { z } from 'zod';
 
 const router = Router();
 
-// GET /api/reviews?productId=...
-router.get('/', (req: Request, res: Response) => {
+const CreateReviewSchema = z.object({
+  productId: z.string().min(1),
+  customerName: z.string().min(2).max(100).trim(),
+  rating: z.number().int().min(1).max(5),
+  comment: z.string().min(5).max(1000).trim()
+});
+
+// GET /api/reviews/product/:productId - Get approved reviews
+router.get('/product/:productId', async (req: Request, res: Response) => {
   try {
-    const { productId } = req.query;
-    const reviews = dataStore.getReviews(productId as string);
+    const { productId } = req.params;
+    const reviews = await reviewRepository.getByProductId(productId);
     res.json({ success: true, data: reviews });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: 'Gagal memuat review' });
+    res.status(500).json({ success: false, message: 'Gagal memuat ulasan produk' });
   }
 });
 
-// POST /api/reviews
-router.post('/', (req: Request, res: Response) => {
+// POST /api/reviews - Submit a new customer review
+router.post('/', async (req: Request, res: Response) => {
   try {
-    const { productId, customerName, rating, comment } = req.body;
-
-    if (!productId || !customerName || !rating || !comment) {
+    const parseResult = CreateReviewSchema.safeParse(req.body);
+    if (!parseResult.success) {
       return res.status(400).json({
         success: false,
-        message: 'Mohon isi rating, nama, dan ulasan produk Anda.'
+        message: getErrorMessage(parseResult.error)
       });
     }
 
-    const prod = dataStore.getProductById(productId);
-    if (!prod) {
-      return res.status(404).json({ success: false, message: 'Produk tidak ditemukan' });
-    }
-
-    const review = dataStore.createReview({
-      productId,
-      productName: prod.name,
-      customerName,
-      rating: Math.max(1, Math.min(5, Number(rating))),
-      comment: comment.trim()
-    });
-
+    const review = await reviewRepository.createReview(parseResult.data);
     res.status(201).json({
       success: true,
-      message: 'Terima kasih! Ulasan Anda berhasil diterbitkan.',
+      message: 'Terima kasih! Ulasan Anda berhasil dikirim.',
       data: review
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: 'Gagal mengirimkan review' });
+    res.status(500).json({ success: false, message: 'Gagal mengirim ulasan' });
   }
 });
 

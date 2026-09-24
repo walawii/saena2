@@ -10,7 +10,8 @@ import {
   ExternalLink,
   ChevronRight,
   ShieldCheck,
-  Printer
+  Printer,
+  RefreshCw
 } from 'lucide-react';
 import { Order } from '../types';
 import { api } from '../services/api';
@@ -29,7 +30,6 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [simulating, setSimulating] = useState(false);
   const [trackingInfo, setTrackingInfo] = useState<any>(null);
 
   const fetchOrder = async () => {
@@ -42,7 +42,7 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
           const trackRes = await api.trackShipping(res.data.trackingNumber);
           setTrackingInfo(trackRes.data);
         } catch (e) {
-          console.error(e);
+          // Track shipping might be in unconfigured state
         }
       }
     } catch (err) {
@@ -54,34 +54,29 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
 
   useEffect(() => {
     fetchOrder();
-  }, [orderNumber]);
+
+    // Auto-poll status if pending payment
+    const interval = setInterval(() => {
+      if (order?.orderStatus === 'PENDING_PAYMENT') {
+        fetchOrder();
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [orderNumber, order?.orderStatus]);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-    onAddToCartSuccess('Nomor Virtual Account berhasil disalin!');
-  };
-
-  const handleSimulatePayment = async () => {
-    if (!order) return;
-    setSimulating(true);
-    try {
-      await api.simulatePayment(order.orderNumber, 'PAID');
-      await fetchOrder();
-      onAddToCartSuccess('Simulasi Berhasil: Status pesanan telah diperbarui menjadi PAID & No. Resi Mengantar terbit!');
-    } catch (e: any) {
-      alert(e.message || 'Gagal simulasi pembayaran');
-    } finally {
-      setSimulating(false);
-    }
+    onAddToCartSuccess('Nomor pembayaran berhasil disalin!');
   };
 
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-20 text-center">
-        <div className="w-10 h-10 border-4 border-blue-900 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-        <p className="text-xs text-slate-500">Memuat status pesanan {orderNumber}...</p>
+        <RefreshCw className="w-8 h-8 text-navy animate-spin mx-auto mb-3" />
+        <p className="text-xs text-slate-500">Memuat status pesanan #{orderNumber} dari database...</p>
       </div>
     );
   }
@@ -92,11 +87,11 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
         <AlertCircle className="w-12 h-12 text-slate-400 mx-auto mb-3" />
         <h2 className="font-serif text-2xl font-bold text-slate-900">Pesanan Tidak Ditemukan</h2>
         <p className="text-xs text-slate-500 mt-2">
-          Nomor pesanan <strong>{orderNumber}</strong> tidak ditemukan di database Saena.id.
+          Nomor pesanan <strong>{orderNumber}</strong> tidak ditemukan di basis data Saena.id.
         </p>
         <button
           onClick={() => onNavigate('/')}
-          className="mt-6 px-6 py-2.5 bg-blue-900 text-white font-semibold text-xs rounded-xl"
+          className="mt-6 px-6 py-2.5 bg-navy text-white font-semibold text-xs rounded-xl hover:bg-navy-dark cursor-pointer"
         >
           Kembali ke Beranda
         </button>
@@ -105,50 +100,108 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
   }
 
   const isPending = order.orderStatus === 'PENDING_PAYMENT';
-  const isPaid = order.paymentStatus === 'PAID';
-  const isShipped = order.orderStatus === 'SHIPPED';
+  const isPaid = order.orderStatus === 'PAID' || order.orderStatus === 'PROCESSING';
+  const isShipped = order.orderStatus === 'SHIPPED' || order.orderStatus === 'READY_TO_SHIP';
+  const isDelivered = order.orderStatus === 'DELIVERED';
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-6">
-      {/* Top Banner Notice */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 sm:p-6 rounded-2xl border border-stone-200 shadow-xs">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500 font-mono">Invoice #{order.orderNumber}</span>
-            <span className={`text-[11px] font-bold px-2 py-0.5 rounded ${
-              isPaid ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-amber-50 text-amber-800 border border-amber-200'
-            }`}>
-              {order.orderStatus.replace(/_/g, ' ')}
-            </span>
+    <div className="max-w-4xl mx-auto px-4 py-8 sm:py-12 space-y-6">
+      {/* Top Banner Status */}
+      <div className="bg-white border border-stone-200 rounded-3xl p-6 sm:p-8 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-stone-100 gap-4">
+          <div>
+            <span className="text-xs text-slate-400 block mb-0.5">Detail Transaksi Resmi</span>
+            <h1 className="font-serif text-2xl font-bold text-navy flex items-center gap-2">
+              <span>Order #{order.orderNumber}</span>
+            </h1>
+            <p className="text-xs text-slate-500 mt-1">
+              Dibuat pada {new Date(order.createdAt).toLocaleDateString('id-ID', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })} WIB
+            </p>
           </div>
-          <h1 className="font-serif text-2xl font-bold text-slate-900 mt-1">
-            {isPaid ? 'Terima Kasih, Pesanan Anda Siap Dikirim!' : 'Menunggu Pembayaran Pesanan'}
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Dipesan pada {new Date(order.createdAt).toLocaleString('id-ID')}
-          </p>
+
+          <div className="flex items-center gap-3">
+            <span className={`text-xs font-bold px-3 py-1.5 rounded-full ${
+              isPaid ? 'bg-emerald-100 text-emerald-800' :
+              isShipped ? 'bg-blue-100 text-blue-800' :
+              isDelivered ? 'bg-purple-100 text-purple-800' :
+              order.orderStatus === 'CANCELLED' ? 'bg-rose-100 text-rose-800' :
+              'bg-amber-100 text-amber-800'
+            }`}>
+              {order.orderStatus === 'PENDING_PAYMENT' ? 'MENUNGGU PEMBAYARAN' :
+               order.orderStatus === 'PAID' ? 'PEMBAYARAN DIVERIFIKASI' :
+               order.orderStatus === 'PROCESSING' ? 'SEDANG DIPROSES' :
+               order.orderStatus === 'SHIPPED' ? 'SEDANG DIKIRIM' :
+               order.orderStatus === 'DELIVERED' ? 'PESANAN DITERIMA' : order.orderStatus}
+            </span>
+
+            <button
+              onClick={() => window.print()}
+              className="p-2 border border-stone-200 rounded-xl hover:bg-stone-50 text-slate-600 transition cursor-pointer"
+              title="Cetak Invoice"
+            >
+              <Printer className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-stone-100 hover:bg-stone-200 rounded-xl transition-colors"
-          >
-            <Printer className="w-4 h-4" />
-            <span>Cetak Invoice</span>
-          </button>
+        {/* Progress Tracker */}
+        <div className="pt-6">
+          <div className="grid grid-cols-4 text-center text-xs">
+            <div className={`space-y-1.5 ${isPending || isPaid || isShipped || isDelivered ? 'text-navy font-bold' : 'text-slate-400'}`}>
+              <div className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center text-xs ${
+                isPending || isPaid || isShipped || isDelivered ? 'bg-navy text-white' : 'bg-stone-200 text-slate-500'
+              }`}>
+                1
+              </div>
+              <span>Pesanan Dibuat</span>
+            </div>
+
+            <div className={`space-y-1.5 ${isPaid || isShipped || isDelivered ? 'text-navy font-bold' : 'text-slate-400'}`}>
+              <div className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center text-xs ${
+                isPaid || isShipped || isDelivered ? 'bg-navy text-white' : 'bg-stone-200 text-slate-500'
+              }`}>
+                2
+              </div>
+              <span>Pembayaran Sah</span>
+            </div>
+
+            <div className={`space-y-1.5 ${isShipped || isDelivered ? 'text-navy font-bold' : 'text-slate-400'}`}>
+              <div className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center text-xs ${
+                isShipped || isDelivered ? 'bg-navy text-white' : 'bg-stone-200 text-slate-500'
+              }`}>
+                3
+              </div>
+              <span>Pengiriman</span>
+            </div>
+
+            <div className={`space-y-1.5 ${isDelivered ? 'text-navy font-bold' : 'text-slate-400'}`}>
+              <div className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center text-xs ${
+                isDelivered ? 'bg-navy text-white' : 'bg-stone-200 text-slate-500'
+              }`}>
+                4
+              </div>
+              <span>Selesai</span>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* PAYMENT INSTRUCTION / DETAILS CARD */}
       {isPending && (
-        <div className="bg-amber-50/60 border border-amber-200 rounded-2xl p-5 sm:p-6 space-y-4">
+        <div className="bg-amber-50/70 border border-amber-200 rounded-3xl p-6 space-y-4 shadow-sm">
           <div className="flex items-center gap-2 text-amber-900">
             <Clock className="w-5 h-5 shrink-0" />
             <h2 className="font-serif text-base font-bold">Instruksi Pembayaran DOKU Gateway</h2>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-4 rounded-xl border border-amber-100">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-5 rounded-2xl border border-amber-100">
             <div>
               <p className="text-xs text-slate-500">Metode Pembayaran:</p>
               <p className="text-sm font-bold text-slate-900">{order.paymentMethod?.name || 'Virtual Account'}</p>
@@ -157,12 +210,12 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
                 <div className="mt-3">
                   <p className="text-xs text-slate-500">Nomor Virtual Account:</p>
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="font-mono text-base font-bold text-blue-900 bg-stone-100 px-3 py-1.5 rounded-lg select-all">
+                    <span className="font-mono text-base font-bold text-navy bg-slate-100 px-3 py-1.5 rounded-xl select-all">
                       {order.paymentMethod.vaNumber}
                     </span>
                     <button
                       onClick={() => handleCopy(order.paymentMethod!.vaNumber!)}
-                      className="p-2 text-slate-600 hover:text-blue-900 rounded-lg hover:bg-stone-100 transition-colors"
+                      className="p-2 text-slate-600 hover:text-navy rounded-lg hover:bg-slate-100 transition cursor-pointer"
                       title="Salin Nomor VA"
                     >
                       {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
@@ -171,40 +224,39 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
                 </div>
               )}
 
+              {order.paymentMethod?.paymentUrl && (
+                <div className="mt-3">
+                  <a
+                    href={order.paymentMethod.paymentUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center space-x-1.5 text-xs font-bold text-white bg-navy hover:bg-navy-dark px-4 py-2 rounded-xl transition"
+                  >
+                    <span>Buka Halaman Pembayaran DOKU</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              )}
+
               {order.paymentMethod?.qrString && (
                 <div className="mt-3">
                   <p className="text-xs text-slate-500">Scan QRIS:</p>
-                  <div className="w-36 h-36 bg-stone-100 border border-stone-300 rounded-xl mt-1 flex flex-col items-center justify-center p-2 text-center">
-                    <span className="text-[10px] font-bold text-slate-600">QRIS STANDAR</span>
-                    <span className="text-[9px] text-slate-400 mt-1">Pindai dari e-wallet favorit</span>
+                  <div className="w-36 h-36 bg-slate-100 border border-slate-300 rounded-xl mt-1 flex flex-col items-center justify-center p-2 text-center">
+                    <span className="text-[10px] font-bold text-slate-700">QRIS DOKU</span>
+                    <span className="text-[9px] text-slate-500 mt-1">Pindai dengan aplikasi pembayaran apa saja</span>
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="border-t sm:border-t-0 sm:border-l border-stone-100 pt-3 sm:pt-0 sm:pl-4 space-y-2">
-              <p className="text-xs text-slate-500">Total Tagihan:</p>
-              <p className="font-serif text-2xl font-bold text-slate-900 tabular-nums">
+            <div className="border-t sm:border-t-0 sm:border-l border-slate-100 pt-3 sm:pt-0 sm:pl-5 space-y-2">
+              <p className="text-xs text-slate-500">Total Nominal Tagihan:</p>
+              <p className="font-serif text-2xl font-bold text-navy">
                 Rp {order.total.toLocaleString('id-ID')}
               </p>
               <p className="text-[11px] text-slate-500 leading-relaxed">
-                {order.paymentMethod?.instructions || 'Silakan transfer sesuai nominal tepat ke nomor Virtual Account di atas sebelum batas waktu berakhir.'}
+                Silakan transfer tepat sesuai nominal sebelum batas waktu 2 jam berakhir. Status pesanan akan otomatis terverifikasi begitu notifikasi webhook DOKU diterima server.
               </p>
-
-              {/* Developer / Demo Simulator Button */}
-              <div className="pt-2">
-                <button
-                  onClick={handleSimulatePayment}
-                  disabled={simulating}
-                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-1.5"
-                >
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>{simulating ? 'Memverifikasi...' : '⚡ Simulasikan Pembayaran Berhasil'}</span>
-                </button>
-                <span className="text-[10px] text-slate-400 block text-center mt-1">
-                  (Klik tombol ini untuk menguji verifikasi otomatis DOKU & penerbitan resi Mengantar)
-                </span>
-              </div>
             </div>
           </div>
         </div>
@@ -212,144 +264,87 @@ export const OrderDetailPage: React.FC<OrderDetailPageProps> = ({
 
       {/* MENGANTAR TRACKING CARD */}
       {order.trackingNumber && (
-        <div className="bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-stone-100">
             <div className="flex items-center gap-2 text-slate-900">
-              <Truck className="w-5 h-5 text-blue-900 shrink-0" />
-              <h2 className="font-serif text-base font-bold">Pelacakan Kurir Mengantar Logistik</h2>
+              <Truck className="w-5 h-5 text-navy shrink-0" />
+              <h2 className="font-serif text-base font-bold">Pelacakan Resi Mengantar Aggregator</h2>
             </div>
-            <span className="text-xs font-mono font-bold text-blue-900 bg-blue-50 px-2.5 py-1 rounded-lg">
-              Resi: {order.trackingNumber}
+            <span className="font-mono font-bold text-xs bg-slate-100 text-navy px-3 py-1 rounded-lg">
+              {order.trackingNumber}
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-            <div>
-              <span className="text-slate-400 block">Layanan Pengiriman:</span>
-              <span className="font-semibold text-slate-800">{order.shippingService}</span>
+          <div className="text-xs text-slate-600">
+            <div className="font-medium text-slate-900 mb-2">
+              Layanan: {order.shippingService} &bull; Kurir: {order.shippingProvider}
             </div>
-            <div>
-              <span className="text-slate-400 block">Status Pengiriman:</span>
-              <span className="font-semibold text-emerald-700">Dalam Perjalanan / Sedang Diantar</span>
-            </div>
-          </div>
 
-          {/* Timeline Checkpoints */}
-          {trackingInfo?.checkpoints && (
-            <div className="pt-3 border-t border-stone-100 space-y-3">
-              <p className="text-xs font-bold text-slate-700">Riwayat Perjalanan Paket:</p>
-              <div className="space-y-3 relative before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-stone-200">
+            {trackingInfo?.checkpoints && trackingInfo.checkpoints.length > 0 ? (
+              <div className="space-y-3 pl-4 border-l-2 border-navy/30">
                 {trackingInfo.checkpoints.map((cp: any, idx: number) => (
-                  <div key={idx} className="relative pl-6 text-xs">
-                    <div className="absolute left-1 top-1 w-2.5 h-2.5 rounded-full bg-blue-900 ring-2 ring-white" />
-                    <p className="font-semibold text-slate-900">{cp.location}</p>
-                    <p className="text-slate-600 mt-0.5">{cp.description}</p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">{cp.timestamp}</p>
+                  <div key={idx} className="relative">
+                    <span className="absolute -left-[21px] top-1 w-2.5 h-2.5 rounded-full bg-navy" />
+                    <span className="font-bold text-slate-800">{cp.status}</span>
+                    <p className="text-slate-500">{cp.description}</p>
+                    <span className="text-[10px] text-slate-400">{cp.timestamp}</span>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-slate-500 text-xs italic">
+                Paket telah diserahkan ke pihak logistik Mengantar dan sedang dalam proses sorting di hub pengiriman.
+              </p>
+            )}
+          </div>
         </div>
       )}
 
-      {/* ORDER ITEMS & BREAKDOWN */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-4">
-        <h2 className="font-serif text-base font-bold text-slate-900 pb-3 border-b border-stone-100">
-          Rincian Produk Pesanan
-        </h2>
+      {/* ITEMS & SUMMARY CARD */}
+      <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-sm space-y-4">
+        <h3 className="font-serif font-bold text-slate-900 text-base">Detail Produk yang Dipesan</h3>
 
         <div className="divide-y divide-stone-100">
           {order.items.map((item, idx) => (
-            <div key={idx} className="py-3 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <img
-                  src={item.image}
-                  alt={item.name}
-                  className="w-14 h-16 object-cover rounded-xl bg-stone-100 shrink-0"
-                />
+            <div key={idx} className="py-3 flex items-center justify-between text-xs">
+              <div className="flex items-center space-x-3">
+                {item.image && (
+                  <img src={item.image} alt={item.name} className="w-12 h-14 object-cover rounded-lg flex-shrink-0" />
+                )}
                 <div>
-                  <h4 className="text-xs sm:text-sm font-semibold text-slate-900">{item.name}</h4>
-                  <p className="text-xs text-slate-500">
-                    Warna: {item.color} · Ukuran: {item.size} · Jumlah: x{item.quantity}
-                  </p>
+                  <span className="font-medium text-slate-900 text-sm">{item.name}</span>
+                  <div className="text-slate-400">
+                    Varian: {item.color} / {item.size} &bull; Kuantitas: {item.quantity} unit
+                  </div>
                 </div>
               </div>
-
-              <span className="text-xs sm:text-sm font-bold text-slate-900 tabular-nums shrink-0">
+              <span className="font-bold text-slate-900 text-sm">
                 Rp {item.subtotal.toLocaleString('id-ID')}
               </span>
             </div>
           ))}
         </div>
 
-        {/* Pricing Subtotals */}
-        <div className="pt-3 border-t border-stone-100 space-y-2 text-xs">
+        <div className="pt-4 border-t border-stone-100 space-y-2 text-xs">
           <div className="flex justify-between text-slate-600">
             <span>Subtotal Produk</span>
-            <span className="font-semibold text-slate-900 tabular-nums">
-              Rp {order.subtotal.toLocaleString('id-ID')}
-            </span>
+            <span>Rp {order.subtotal.toLocaleString('id-ID')}</span>
           </div>
-
           {order.discount > 0 && (
-            <div className="flex justify-between text-emerald-700">
-              <span>Diskon Voucher ({order.voucherCode})</span>
-              <span className="font-semibold tabular-nums">
-                - Rp {order.discount.toLocaleString('id-ID')}
-              </span>
+            <div className="flex justify-between text-emerald-600 font-medium">
+              <span>Diskon Voucher</span>
+              <span>- Rp {order.discount.toLocaleString('id-ID')}</span>
             </div>
           )}
-
           <div className="flex justify-between text-slate-600">
-            <span>Biaya Pengiriman Kurir Mengantar</span>
-            <span className="font-semibold text-slate-900 tabular-nums">
-              Rp {order.shippingCost.toLocaleString('id-ID')}
-            </span>
+            <span>Biaya Pengiriman</span>
+            <span>Rp {order.shippingCost.toLocaleString('id-ID')}</span>
           </div>
-
-          <div className="pt-2 border-t border-stone-200 flex justify-between items-baseline font-bold text-sm">
-            <span className="text-slate-900">Total Pembayaran</span>
-            <span className="font-serif text-xl text-blue-900 tabular-nums">
-              Rp {order.total.toLocaleString('id-ID')}
-            </span>
+          <div className="flex justify-between text-base font-serif font-bold text-navy pt-2 border-t border-stone-100">
+            <span>Total Transaksi</span>
+            <span>Rp {order.total.toLocaleString('id-ID')}</span>
           </div>
         </div>
-      </div>
-
-      {/* SHIPPING ADDRESS & CONTACT */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 bg-white border border-stone-200 rounded-2xl p-5 sm:p-6 shadow-xs text-xs">
-        <div>
-          <h3 className="font-serif text-sm font-bold text-slate-900 mb-2">Alamat Pengiriman</h3>
-          <p className="font-semibold text-slate-800">{order.shippingAddress.recipientName} ({order.shippingAddress.phone})</p>
-          <p className="text-slate-600 mt-1 leading-relaxed">
-            {order.shippingAddress.fullAddress}
-          </p>
-          <p className="text-slate-500 mt-0.5">
-            {order.shippingAddress.subdistrict}, {order.shippingAddress.city}, {order.shippingAddress.province} {order.shippingAddress.postalCode}
-          </p>
-          {order.shippingAddress.notes && (
-            <p className="text-amber-800 bg-amber-50 p-2 rounded-lg mt-2">
-              Catatan: {order.shippingAddress.notes}
-            </p>
-          )}
-        </div>
-
-        <div>
-          <h3 className="font-serif text-sm font-bold text-slate-900 mb-2">Informasi Pemesan</h3>
-          <p className="text-slate-600">Nama: <span className="font-semibold text-slate-800">{order.customer.name}</span></p>
-          <p className="text-slate-600 mt-1">Email: <span className="font-semibold text-slate-800">{order.customer.email}</span></p>
-          <p className="text-slate-600 mt-1">WhatsApp: <span className="font-semibold text-slate-800">{order.customer.phone}</span></p>
-        </div>
-      </div>
-
-      <div className="text-center pt-4">
-        <button
-          onClick={() => onNavigate('/produk')}
-          className="px-6 py-2.5 bg-blue-900 text-white font-semibold text-xs rounded-xl hover:bg-slate-900"
-        >
-          Lanjut Belanja Busana Muslim
-        </button>
       </div>
     </div>
   );

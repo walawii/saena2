@@ -1,9 +1,21 @@
 import { Router, Request, Response } from 'express';
 import { shippingService } from '../providers/shipping/index.js';
+import { orderRepository } from '../repositories/postgres/orderRepository.js';
+import { webhookRepository } from '../repositories/postgres/webhookRepository.js';
+import { getErrorMessage } from '../validators/formatError.js';
+import { z } from 'zod';
 
 const router = Router();
 
-// GET /api/shipping/status - Provider connection status
+const ShippingRateSchema = z.object({
+  destinationProvince: z.string().min(2, 'Provinsi tujuan wajib diisi'),
+  destinationCity: z.string().min(2, 'Kota/Kabupaten tujuan wajib diisi'),
+  destinationSubdistrict: z.string().min(2, 'Kecamatan tujuan wajib diisi'),
+  destinationPostalCode: z.string().min(4, 'Kode pos tujuan minimal 4 karakter'),
+  weightInGrams: z.number().int().min(10, 'Berat barang minimal 10 gram')
+});
+
+// GET /api/shipping/status - Mengantar Aggregator status
 router.get('/status', (_req: Request, res: Response) => {
   res.json({
     success: true,
@@ -11,85 +23,211 @@ router.get('/status', (_req: Request, res: Response) => {
   });
 });
 
-// POST /api/shipping/mengantar/rates - Calculate rates
-router.post('/mengantar/rates', async (req: Request, res: Response) => {
+// POST /api/shipping/calculate or /api/shipping/rates - Calculate live shipping rate
+router.post(['/calculate', '/rates'], async (req: Request, res: Response) => {
   try {
-    const {
-      originPostalCode,
-      destinationPostalCode,
-      destinationProvince,
-      destinationCity,
-      destinationSubdistrict,
-      weightInGrams
-    } = req.body;
-
-    if (!destinationProvince || !destinationCity) {
+    const parseResult = ShippingRateSchema.safeParse(req.body);
+    if (!parseResult.success) {
       return res.status(400).json({
         success: false,
-        message: 'Provinsi dan Kota/Kabupaten tujuan wajib diisi untuk menghitung ongkir.'
+        message: getErrorMessage(parseResult.error)
       });
     }
 
     const provider = shippingService.getProvider();
-    const rates = await provider.calculateRates({
-      originPostalCode: originPostalCode || process.env.MENGANTAR_ORIGIN_POSTAL_CODE || '12430',
-      destinationPostalCode: destinationPostalCode || '10110',
-      destinationProvince,
-      destinationCity,
-      destinationSubdistrict: destinationSubdistrict || destinationCity,
-      weightInGrams: Number(weightInGrams || 500)
-    });
+    const isProduction = process.env.NODE_ENV === 'production';
 
-    res.json({
-      success: true,
-      provider: provider.name,
-      isLive: shippingService.isLiveProvider(),
-      data: rates
-    });
+    // 1. Check if Mengantar is configured
+    if (!provider.isConfigured()) {
+      if (isProduction) {
+        return res.status(503).json({
+          success: false,
+          isConfigured: false,
+          error: 'SHIPPING_NOT_CONFIGURED',
+          message: 'Layanan logistik Mengantar belum terkonfigurasi. MENGANTAR_API_KEY wajib diatur di environment produksi.'
+        });
+      }
+
+      // Development / test fallback only
+      return res.json({
+        success: true,
+        isConfigured: false,
+        isDevelopmentFallback: true,
+        warning: '[DEVELOPMENT ONLY] MENGANTAR_API_KEY belum dikonfigurasi. Menggunakan data simulasi pengiriman lokal.',
+        data: [
+          {
+            provider: 'mengantar',
+            courierCode: 'JNE',
+            serviceCode: 'REG',
+            serviceName: 'Mengantar - JNE Reguler',
+            estimatedDays: '2-3 hari kerja',
+            cost: 15000,
+            description: 'Layanan reguler via agregator Mengantar (Dev Preview)'
+          },
+          {
+            provider: 'mengantar',
+            courierCode: 'SICEPAT',
+            serviceCode: 'SIUNT',
+            serviceName: 'Mengantar - SiCepat Untung',
+            estimatedDays: '2-3 hari kerja',
+            cost: 14000,
+            description: 'Layanan hemat terpercaya (Dev Preview)'
+          },
+          {
+            provider: 'mengantar',
+            courierCode: 'JNT',
+            serviceCode: 'EZ',
+            serviceName: 'Mengantar - J&T EZ',
+            estimatedDays: '1-2 hari kerja',
+            cost: 18000,
+            description: 'Pengiriman ekspres cepat (Dev Preview)'
+          }
+        ]
+      });
+    }
+
+    // 2. Query official Mengantar API
+    try {
+      const rates = await provider.calculateRates({
+        originPostalCode: process.env.MENGANTAR_ORIGIN_POSTAL || '12430',
+        destinationPostalCode: parseResult.data.destinationPostalCode,
+        destinationSubdistrict: parseResult.data.destinationSubdistrict,
+        destinationCity: parseResult.data.destinationCity,
+        destinationProvince: parseResult.data.destinationProvince,
+        weightInGrams: parseResult.data.weightInGrams
+      });
+
+      return res.json({
+        success: true,
+        isConfigured: true,
+        data: rates
+      });
+    } catch (apiErr: any) {
+      console.error('[Mengantar Live Rate API Error]:', apiErr.message?.slice(0, 150));
+
+      if (isProduction) {
+        // In production: STRICTLY REJECT. Do not fake rates or allow unverified checkout.
+        return res.status(502).json({
+          success: false,
+          isConfigured: true,
+          error: 'MENGANTAR_API_UNAVAILABLE',
+          message: apiErr.message || 'Gagal mengambil tarif resmi dari agregator logistik Mengantar. Silakan periksa kelengkapan alamat tujuan atau coba beberapa saat lagi.'
+        });
+      }
+
+      // Development / Testing fallback when external API fails or is protected
+      return res.json({
+        success: true,
+        isConfigured: false,
+        isDevelopmentFallback: true,
+        warning: '[DEVELOPMENT ONLY] Gagal menghubungi endpoint Mengantar eksternal, beralih ke estimasi tarif lokal untuk pengujian.',
+        data: [
+          {
+            provider: 'mengantar',
+            courierCode: 'JNE',
+            serviceCode: 'REG',
+            serviceName: 'Mengantar - JNE Reguler',
+            estimatedDays: '2-3 hari kerja',
+            cost: 15000,
+            description: 'Layanan reguler via agregator Mengantar (Dev Fallback)'
+          },
+          {
+            provider: 'mengantar',
+            courierCode: 'SICEPAT',
+            serviceCode: 'SIUNT',
+            serviceName: 'Mengantar - SiCepat Untung',
+            estimatedDays: '2-3 hari kerja',
+            cost: 14000,
+            description: 'Layanan hemat terpercaya (Dev Fallback)'
+          },
+          {
+            provider: 'mengantar',
+            courierCode: 'JNT',
+            serviceCode: 'EZ',
+            serviceName: 'Mengantar - J&T EZ',
+            estimatedDays: '1-2 hari kerja',
+            cost: 18000,
+            description: 'Pengiriman ekspres cepat (Dev Fallback)'
+          }
+        ]
+      });
+    }
   } catch (err: any) {
-    console.error('Error calculating shipping rates:', err.message);
+    console.error('[Shipping Rate Route Error]:', err.message?.slice(0, 100));
     res.status(500).json({
       success: false,
-      message: 'Tarif pengiriman belum dapat diperoleh. Silakan coba beberapa saat lagi.',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      message: 'Gagal memproses perhitungan ongkos kirim. Silakan coba kembali.'
     });
   }
 });
 
-// POST /api/shipping/mengantar/create - Create shipment
-router.post('/mengantar/create', async (req: Request, res: Response) => {
-  try {
-    const provider = shippingService.getProvider();
-    const shipment = await provider.createShipment(req.body);
-    res.json({
-      success: true,
-      data: shipment
-    });
-  } catch (err: any) {
-    res.status(500).json({
-      success: false,
-      message: 'Gagal membuat pengiriman dengan kurir Mengantar',
-      error: err.message
-    });
-  }
-});
-
-// GET /api/shipping/mengantar/track/:trackingNumber - Track shipment
-router.get('/mengantar/track/:trackingNumber', async (req: Request, res: Response) => {
+// GET /api/shipping/track/:trackingNumber - Track Mengantar shipment
+router.get('/track/:trackingNumber', async (req: Request, res: Response) => {
   try {
     const { trackingNumber } = req.params;
     const provider = shippingService.getProvider();
-    const tracking = await provider.trackShipment(trackingNumber);
+
+    if (!provider.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Layanan pelacakan resi belum terkonfigurasi. MENGANTAR_API_KEY belum disetel.'
+      });
+    }
+
+    const trackingResult = await provider.trackShipment(trackingNumber);
     res.json({
       success: true,
-      data: tracking
+      data: trackingResult
     });
   } catch (err: any) {
     res.status(500).json({
       success: false,
-      message: 'Gagal melacak nomor resi pengiriman.',
-      error: err.message
+      message: err.message || 'Gagal melacak nomor resi pengiriman'
     });
+  }
+});
+
+// POST /api/shipping/mengantar/webhook - Mengantar Webhook for delivery events
+router.post('/mengantar/webhook', async (req: Request, res: Response) => {
+  try {
+    const eventId = req.headers['x-mengantar-event-id'] as string || req.body?.event_id || `mgt_${Date.now()}`;
+    const idempotencyKey = `mengantar_webhook_${eventId}`;
+
+    const alreadyProcessed = await webhookRepository.isAlreadyProcessed(idempotencyKey);
+    if (alreadyProcessed) {
+      return res.status(200).json({ success: true, message: 'Event already processed' });
+    }
+
+    await webhookRepository.recordEvent({
+      provider: 'MENGANTAR',
+      eventId,
+      eventType: req.body?.status || req.body?.event_type || 'SHIPMENT_UPDATE',
+      idempotencyKey,
+      payload: req.body
+    });
+
+    const waybill = req.body?.waybill_number || req.body?.tracking_number;
+    const newStatus = (req.body?.status || '').toUpperCase();
+
+    if (waybill) {
+      if (newStatus === 'DELIVERED') {
+        const order = await orderRepository.findByTrackingNumber(waybill);
+        if (order && order.orderStatus !== 'DELIVERED') {
+          await orderRepository.updateOrderStatus(order.orderNumber, 'DELIVERED', 'Paket berhasil diterima pelanggan (Mengantar Webhook)');
+        }
+      } else if (newStatus === 'ON_DELIVERY' || newStatus === 'SHIPPED') {
+        const order = await orderRepository.findByTrackingNumber(waybill);
+        if (order && order.orderStatus === 'PROCESSING') {
+          await orderRepository.updateOrderStatus(order.orderNumber, 'SHIPPED', 'Paket dalam proses pengiriman kurir');
+        }
+      }
+    }
+
+    await webhookRepository.markProcessed(idempotencyKey, 'PROCESSED');
+    res.status(200).json({ success: true, message: 'Mengantar webhook processed' });
+  } catch (err: any) {
+    console.error('[Mengantar Webhook Error]:', err.message);
+    res.status(500).json({ success: false, message: 'Internal error' });
   }
 });
 

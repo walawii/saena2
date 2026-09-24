@@ -1,7 +1,8 @@
 {
-  "name": "Saena.id - Busana Muslim Modern & Elegan",
+  "name": "Saena 2",
   "description": "Online shop busana muslim Indonesia modern, elegan, dan premium dengan gamis, dress muslim, mukena, hijab, dan daster.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
-

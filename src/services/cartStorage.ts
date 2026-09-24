@@ -18,6 +18,7 @@ export const cartStorage = {
       items: [],
       subtotal: 0,
       discount: 0,
+      shippingFee: 0,
       total: 0,
       totalWeight: 0,
     };
@@ -49,7 +50,8 @@ export const cartStorage = {
         productId: product.id,
         variantId: variant.id,
         product,
-        selectedColor: variant.colorName,
+        variant,
+        selectedColor: variant.colorName || 'Default',
         selectedSize: variant.size,
         quantity,
         price: unitPrice,
@@ -93,6 +95,7 @@ export const cartStorage = {
       items: [],
       subtotal: 0,
       discount: 0,
+      shippingFee: 0,
       total: 0,
       totalWeight: 0,
     };
@@ -101,9 +104,9 @@ export const cartStorage = {
   },
 
   recalculate(cart: Cart) {
-    cart.subtotal = cart.items.reduce((sum, item) => sum + item.totalPrice, 0);
-    cart.totalWeight = cart.items.reduce((sum, item) => sum + ((item.product.weight || 300) * item.quantity), 0);
-    cart.total = Math.max(0, cart.subtotal - (cart.discount || 0));
+    cart.subtotal = cart.items.reduce((sum, item) => sum + (item.totalPrice || item.price * item.quantity), 0);
+    cart.totalWeight = cart.items.reduce((sum, item) => sum + ((item.product.weightInGrams || item.product.weight || 300) * item.quantity), 0);
+    cart.total = Math.max(0, cart.subtotal - (cart.discount || 0) + (cart.shippingFee || 0));
   },
 
   // --- WISHLIST ---
@@ -123,29 +126,23 @@ export const cartStorage = {
   },
 
   toggleWishlist(product: Product): boolean {
-    const list = this.getWishlist();
-    const index = list.findIndex(p => p.id === product.id);
-    let isAdded = false;
-
-    if (index > -1) {
-      list.splice(index, 1);
-      isAdded = false;
+    let list = this.getWishlist();
+    const exists = list.some(p => p.id === product.id);
+    if (exists) {
+      list = list.filter(p => p.id !== product.id);
     } else {
       list.push(product);
-      isAdded = true;
     }
-
     try {
       localStorage.setItem(WISHLIST_KEY, JSON.stringify(list));
       window.dispatchEvent(new Event('saena_wishlist_updated'));
     } catch (e) {
       console.error(e);
     }
-
-    return isAdded;
+    return !exists;
   },
 
-  // --- CURRENT USER SESSION ---
+  // --- AUTH / USER LOCAL STATE (PROFILE CACHE) ---
   getCurrentUser(): User | null {
     try {
       const data = localStorage.getItem(USER_KEY);
@@ -156,38 +153,52 @@ export const cartStorage = {
     return null;
   },
 
-  saveCurrentUser(user: User | null) {
-    if (user) {
-      localStorage.setItem(USER_KEY, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(USER_KEY);
-      localStorage.removeItem('saena_auth_token');
+  setCurrentUser(user: User | null) {
+    try {
+      if (user) {
+        localStorage.setItem(USER_KEY, JSON.stringify(user));
+      } else {
+        localStorage.removeItem(USER_KEY);
+      }
+      window.dispatchEvent(new Event('saena_user_updated'));
+    } catch (e) {
+      console.error(e);
     }
-    window.dispatchEvent(new Event('saena_auth_updated'));
   },
 
-  addOrUpdateUserAddress(address: ShippingAddress): ShippingAddress[] {
-    const user = this.getCurrentUser();
-    if (!user) return [];
+  saveCurrentUser(user: User | null) {
+    this.setCurrentUser(user);
+  },
 
-    const newAddr = {
+  logoutUser() {
+    this.setCurrentUser(null);
+    localStorage.removeItem('saena_auth_token');
+  },
+
+  addOrUpdateUserAddress(address: Omit<ShippingAddress, 'id'> | ShippingAddress): ShippingAddress {
+    return this.addAddress(address);
+  },
+
+  addAddress(address: Omit<ShippingAddress, 'id'> | ShippingAddress): ShippingAddress {
+    const user = this.getCurrentUser();
+    const newAddress: ShippingAddress = {
       ...address,
-      id: address.id || `addr-${Date.now()}`
+      id: (address as any).id || `addr-${Date.now()}`
     };
 
-    if (newAddr.isDefault || user.addresses.length === 0) {
-      user.addresses.forEach(a => { a.isDefault = false; });
-      newAddr.isDefault = true;
+    if (user) {
+      if (newAddress.isDefault) {
+        user.addresses = user.addresses.map(a => ({ ...a, isDefault: false }));
+      }
+      const existingIdx = user.addresses.findIndex(a => a.id === newAddress.id);
+      if (existingIdx > -1) {
+        user.addresses[existingIdx] = newAddress;
+      } else {
+        user.addresses.push(newAddress);
+      }
+      this.setCurrentUser(user);
     }
 
-    const existingIdx = user.addresses.findIndex(a => a.id === newAddr.id);
-    if (existingIdx > -1) {
-      user.addresses[existingIdx] = newAddr;
-    } else {
-      user.addresses.push(newAddr);
-    }
-
-    this.saveCurrentUser(user);
-    return user.addresses;
+    return newAddress;
   }
 };
