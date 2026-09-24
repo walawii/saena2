@@ -4,22 +4,19 @@ import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { createExpressApp } from './server/app.js';
 import { isDatabaseConfigured, testConnection } from './server/db/connection.js';
-import { runMigrations } from './server/db/migrator.js';
-import { seedDatabase } from './server/db/seed.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function startServer() {
-  // Run database migrations and seeding if database is configured
+  // Check database connection status on startup (NO automatic migrations or seeding)
+  // Schema migrations must only be run manually via: npm run db:migrate
+  // Database seeding must only be run manually via: npm run db:seed
   if (isDatabaseConfigured()) {
     try {
       const status = await testConnection();
       if (status.isConnected) {
-        console.log('[PostgreSQL] Connected successfully. Running migrations...');
-        await runMigrations();
-        await seedDatabase();
-        console.log('[PostgreSQL] Database setup and seed verified.');
+        console.log('[PostgreSQL] Database connection verified.');
       } else {
         console.warn('[PostgreSQL Warning]:', status.errorMessage);
       }
@@ -50,6 +47,9 @@ async function startServer() {
     const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
+      if (_req.path.startsWith('/api')) {
+        return res.status(404).json({ success: false, message: 'API endpoint tidak ditemukan' });
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
